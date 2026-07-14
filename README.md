@@ -27,13 +27,4 @@ Version: **1.0**
     -   Double-tap to sleep (requires Accessibility Service).
     -   Long press home for notifications.
 
-## 🛠 Installation
-
-1.  Download the latest `app-debug.apk` from the [Releases](../../releases) section.
-2.  Install the APK on your Android device.
-3.  Set **EssentialTray** as your default Home app in Android Settings.
-
 Licensed under the **Apache License, Version 2.0**. See the [LICENSE](LICENSE) file for more details.
-
----
-*Created by [Boris55555]*
