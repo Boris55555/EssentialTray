@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">EssentialTray</string>
+    <string name="accessibility_service_description">Used to lock the screen via double tap gesture.</string>
+</resources>
