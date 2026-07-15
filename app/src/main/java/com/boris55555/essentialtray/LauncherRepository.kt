@@ -30,7 +30,13 @@ data class AppInfo(
     val userHandle: UserHandle? = null,
     val tags: List<String> = emptyList(),
     val isPrivate: Boolean = false
-)
+) {
+    fun getUniqueId(context: Context): String {
+        val userManager = context.getSystemService(Context.USER_SERVICE) as UserManager
+        val serial = try { userManager.getSerialNumberForUser(userHandle!!) } catch (e: Exception) { 0L }
+        return "$packageName|$serial"
+    }
+}
 
 data class WidgetProviderInfo(
     val label: String,
@@ -179,10 +185,10 @@ class LauncherRepository(private val context: Context) {
             preferences[CUSTOM_LABELS_KEY] = current
         }
     }
-    suspend fun toggleHiddenApp(packageName: String) {
+    suspend fun toggleHiddenApp(uniqueId: String) {
         context.dataStore.edit { preferences ->
             val current = preferences[HIDDEN_APPS_KEY]?.toMutableSet() ?: mutableSetOf()
-            if (current.contains(packageName)) current.remove(packageName) else current.add(packageName)
+            if (current.contains(uniqueId)) current.remove(uniqueId) else current.add(uniqueId)
             preferences[HIDDEN_APPS_KEY] = current
         }
     }
@@ -270,7 +276,7 @@ class LauncherRepository(private val context: Context) {
         }
     }
 
-    fun getInstalledApps(): List<AppInfo> {
+    suspend fun getInstalledApps(): List<AppInfo> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as LauncherApps
         val userManager = context.getSystemService(Context.USER_SERVICE) as UserManager
         
@@ -296,7 +302,7 @@ class LauncherRepository(private val context: Context) {
                     allApps.add(AppInfo(
                         label = activity.label.toString(), 
                         packageName = activity.applicationInfo.packageName, 
-                        icon = activity.getIcon(0), 
+                        icon = null, // EssentialTray is text-based, don't load icons to save battery/RAM
                         userHandle = user,
                         isPrivate = isPrivate
                     ))
@@ -305,21 +311,21 @@ class LauncherRepository(private val context: Context) {
                 // Profile might be locked
             }
         }
-        return allApps.distinctBy { "${it.packageName}_${userManager.getSerialNumberForUser(it.userHandle!!)}" }.sortedBy { it.label.lowercase() }
+        allApps.distinctBy { "${it.packageName}_${userManager.getSerialNumberForUser(it.userHandle!!)}" }.sortedBy { it.label.lowercase() }
     }
 
-    fun getCameraApps(): List<AppInfo> {
+    suspend fun getCameraApps(): List<AppInfo> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val pm = context.packageManager
         val intent = Intent(android.provider.MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)
-        return pm.queryIntentActivities(intent, 0).map { resolveInfo ->
+        pm.queryIntentActivities(intent, 0).map { resolveInfo ->
             AppInfo(label = resolveInfo.loadLabel(pm).toString(), packageName = resolveInfo.activityInfo.packageName)
         }.distinctBy { it.packageName }.sortedBy { it.label.lowercase() }
     }
 
-    fun getMapsApps(): List<AppInfo> {
+    suspend fun getMapsApps(): List<AppInfo> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val pm = context.packageManager
         val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("geo:0,0"))
-        return pm.queryIntentActivities(intent, 0)
+        pm.queryIntentActivities(intent, 0)
             .map { resolveInfo -> AppInfo(label = resolveInfo.loadLabel(pm).toString(), packageName = resolveInfo.activityInfo.packageName) }
             .filter { app ->
                 val label = app.label.lowercase()
@@ -331,49 +337,62 @@ class LauncherRepository(private val context: Context) {
             .distinctBy { it.packageName }.sortedBy { it.label.lowercase() }
     }
 
-    fun getCalendarApps(): List<AppInfo> {
+    suspend fun getCalendarApps(): List<AppInfo> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val pm = context.packageManager
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CALENDAR)
         val apps = pm.queryIntentActivities(intent, 0).map { resolveInfo ->
             AppInfo(label = resolveInfo.loadLabel(pm).toString(), packageName = resolveInfo.activityInfo.packageName)
         }.toMutableList()
         if (apps.isEmpty()) {
-            return getInstalledApps().filter { val l = it.label.lowercase(); l.contains("calendar") || l.contains("kalenteri") }
+            val installed = getInstalledApps()
+            installed.filter { val l = it.label.lowercase(); l.contains("calendar") || l.contains("kalenteri") }
+        } else {
+            apps.distinctBy { it.packageName }.sortedBy { it.label.lowercase() }
         }
-        return apps.distinctBy { it.packageName }.sortedBy { it.label.lowercase() }
     }
 
-    fun getAvailableWidgets(): List<WidgetProviderInfo> {
+    suspend fun getAvailableWidgets(): List<WidgetProviderInfo> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val appWidgetManager = AppWidgetManager.getInstance(context)
         val pm = context.packageManager
-        return appWidgetManager.installedProviders.map { info ->
+        appWidgetManager.installedProviders.map { info ->
             WidgetProviderInfo(label = info.loadLabel(pm), providerName = info.provider.className, packageName = info.provider.packageName, previewImage = info.loadPreviewImage(context, 0), icon = info.loadIcon(context, 0), info = info)
         }.sortedBy { it.label.lowercase() }
     }
 
-    fun launchApp(packageName: String) {
+    fun launchApp(packageName: String, user: UserHandle? = null) {
         val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as LauncherApps
         val userManager = context.getSystemService(Context.USER_SERVICE) as UserManager
-        for (user in userManager.userProfiles) {
-            val activities = launcherApps.getActivityList(packageName, user)
+        val profiles = if (user != null) listOf(user) else userManager.userProfiles
+        for (profile in profiles) {
+            val activities = launcherApps.getActivityList(packageName, profile)
             if (activities.isNotEmpty()) {
-                launcherApps.startMainActivity(activities[0].componentName, user, null, null)
+                launcherApps.startMainActivity(activities[0].componentName, profile, null, null)
                 return
             }
         }
     }
 
-    fun canUninstall(packageName: String): Boolean {
+    fun canUninstall(packageName: String, user: UserHandle? = null): Boolean {
         return try {
-            val info = context.packageManager.getApplicationInfo(packageName, 0)
+            val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as LauncherApps
+            val info = if (user != null && user != android.os.Process.myUserHandle()) {
+                launcherApps.getApplicationInfo(packageName, 0, user)
+            } else {
+                context.packageManager.getApplicationInfo(packageName, 0)
+            }
             (info.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) == 0
         } catch (e: Exception) { false }
     }
 
-    fun uninstallApp(packageName: String) {
+    fun uninstallApp(packageName: String, user: UserHandle? = null) {
         try {
-            val uri = android.net.Uri.fromParts("package", packageName, null)
-            val intent = Intent(Intent.ACTION_DELETE, uri)
+            val intent = Intent(Intent.ACTION_DELETE).apply {
+                data = android.net.Uri.fromParts("package", packageName, null)
+                if (user != null) {
+                    putExtra(Intent.EXTRA_USER, user)
+                }
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
             context.startActivity(intent)
         } catch (e: Exception) { e.printStackTrace() }
     }
@@ -431,8 +450,8 @@ class LauncherRepository(private val context: Context) {
         } catch (e: Exception) { e.printStackTrace() }
     }
 
-    fun getTodayEvents(): List<String> {
-        if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_CALENDAR) != android.content.pm.PackageManager.PERMISSION_GRANTED) return emptyList()
+    suspend fun getTodayEvents(): List<String> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_CALENDAR) != android.content.pm.PackageManager.PERMISSION_GRANTED) return@withContext emptyList()
         val events = mutableListOf<String>()
         val now = java.util.Calendar.getInstance()
         val startOfDay = now.clone() as java.util.Calendar
@@ -474,6 +493,6 @@ class LauncherRepository(private val context: Context) {
             }
         } catch (e: Exception) {
 e.printStackTrace() }
-        return events
+        return@withContext events
     }
 }

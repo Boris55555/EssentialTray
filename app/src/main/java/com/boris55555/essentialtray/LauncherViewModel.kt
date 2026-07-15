@@ -1,6 +1,7 @@
 package com.boris55555.essentialtray
 
 import android.app.Application
+import android.os.UserHandle
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -131,7 +132,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val isLocked = args[5] as Boolean
 
         apps.filter { app ->
-            if (hidden.contains(app.packageName)) return@filter false
+            val uniqueId = app.getUniqueId(getApplication())
+            if (hidden.contains(uniqueId)) return@filter false
             if (app.isPrivate && (!showPrivate || isLocked)) return@filter false
             true
         }.map { app ->
@@ -141,14 +143,23 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allHiddenApps: StateFlow<List<AppInfo>> = combine(installedApps, customLabels, hiddenApps) { apps, labels, hidden ->
-        apps.filter { hidden.contains(it.packageName) }
+        apps.filter { app ->
+            val uniqueId = app.getUniqueId(getApplication())
+            hidden.contains(uniqueId)
+        }
             .map { app -> labels[app.packageName]?.let { app.copy(label = it) } ?: app }
             .sortedBy { it.label.lowercase() }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init { refreshApps() }
 
+    private var lastRefreshTime = 0L
+
     fun refreshApps() {
+        val now = System.currentTimeMillis()
+        if (now - lastRefreshTime < 1000) return // Avoid refreshing too often
+        lastRefreshTime = now
+
         viewModelScope.launch {
             installedApps.value = repository.getInstalledApps()
             cameraApps.value = repository.getCameraApps()
@@ -205,10 +216,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setDateFormat(format: String) = viewModelScope.launch { repository.setDateFormat(format) }
     fun renameApp(packageName: String, newName: String) = viewModelScope.launch { repository.setCustomLabel(packageName, newName) }
     fun setAppTags(packageName: String, tags: List<String>) = viewModelScope.launch { repository.setAppTags(packageName, tags) }
-    fun toggleAppVisibility(packageName: String) = viewModelScope.launch { repository.toggleHiddenApp(packageName) }
+    fun toggleAppVisibility(app: AppInfo) = viewModelScope.launch { 
+        repository.toggleHiddenApp(app.getUniqueId(getApplication())) 
+    }
     fun togglePopularVisibility(packageName: String) = viewModelScope.launch { repository.toggleHiddenFromPopular(packageName) }
-    fun canUninstall(packageName: String): Boolean = repository.canUninstall(packageName)
-    fun uninstallApp(packageName: String) = repository.uninstallApp(packageName)
+    fun canUninstall(packageName: String, user: UserHandle? = null): Boolean = repository.canUninstall(packageName, user)
+    fun uninstallApp(packageName: String, user: UserHandle? = null) = repository.uninstallApp(packageName, user)
     fun setThreeFingerTapEnabled(enabled: Boolean) = viewModelScope.launch { repository.setThreeFingerTap(enabled) }
     fun setShowSettingsButton(show: Boolean) = viewModelScope.launch { repository.setShowSettingsIcon(show) }
     fun setShowPrivateSpace(show: Boolean) = viewModelScope.launch { repository.setShowPrivateSpace(show) }
@@ -260,7 +273,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
     private suspend fun saveWidgets(list: List<LauncherWidget>) = repository.saveWidgetData(list.joinToString(",") { "${it.id}:${it.height}:${it.providerName ?: ""}" })
 
-    fun launchApp(packageName: String) {
+    fun launchApp(app: AppInfo) {
+        viewModelScope.launch {
+            repository.incrementUsage(app.packageName)
+            repository.launchApp(app.packageName, app.userHandle)
+        }
+    }
+    fun launchAppByPackage(packageName: String) {
         viewModelScope.launch {
             repository.incrementUsage(packageName)
             repository.launchApp(packageName)

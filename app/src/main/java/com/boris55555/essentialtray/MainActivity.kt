@@ -55,6 +55,7 @@ import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -227,9 +228,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus && ::viewModel.isInitialized) {
-            viewModel.refreshApps()
-        }
+        // Only refresh when gaining focus if we are not already refreshed by onResume
     }
 
     override fun onDestroy() {
@@ -258,6 +257,7 @@ fun LauncherNavHost(
             HomeScreen(
                 viewModel = viewModel,
                 onSwipeUp = { navController.navigate("all_apps") },
+                onSwipeDown = { viewModel.expandNotifications() },
                 onSwipeRight = { 
                     if (enableWidgets) {
                         navController.navigate("widgets") 
@@ -277,7 +277,8 @@ fun LauncherNavHost(
             WidgetScreen(
                 viewModel = viewModel,
                 onSwipeLeft = { navController.popBackStack() },
-                appWidgetHost = appWidgetHost
+                appWidgetHost = appWidgetHost,
+                onAddWidget = { navController.navigate("settings/widget_picker") }
             )
         }
         composable("top_apps") {
@@ -389,6 +390,7 @@ fun LauncherNavHost(
 fun HomeScreen(
     viewModel: LauncherViewModel,
     onSwipeUp: () -> Unit,
+    onSwipeDown: () -> Unit,
     onSwipeRight: () -> Unit,
     onSwipeLeft: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -444,6 +446,8 @@ fun HomeScreen(
                 onDragStopped = {
                     if (offsetY < -200) {
                         onSwipeUp()
+                    } else if (offsetY > 200) {
+                        onSwipeDown()
                     }
                     offsetY = 0f
                 }
@@ -502,7 +506,7 @@ fun HomeScreen(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .padding(top = 32.dp)
-                .clickable { selectedCalendar?.let { viewModel.launchApp(it) } }
+                .clickable { selectedCalendar?.let { viewModel.launchAppByPackage(it) } }
         )
 
         if (enableCalendarEvents && todayEvents.isNotEmpty()) {
@@ -563,7 +567,7 @@ fun HomeScreen(
                         fontWeight = FontWeight.Normal,
                         modifier = Modifier
                             .padding(vertical = 12.dp)
-                            .clickable { viewModel.launchApp(app.packageName) }
+                            .clickable { viewModel.launchApp(app) }
                     )
                     if (app.isPrivate) {
                         Icon(
@@ -626,7 +630,7 @@ fun HomeScreen(
 
                 if (show) {
                     IconButton(
-                        onClick = { selected?.let { viewModel.launchApp(it) } },
+                        onClick = { selected?.let { viewModel.launchAppByPackage(it) } },
                         modifier = Modifier.size(56.dp)
                     ) {
                         Icon(imageVector = icon, contentDescription = desc, tint = themeColor, modifier = Modifier.size(32.dp))
@@ -671,7 +675,7 @@ fun HomeScreen(
 
                 if (show) {
                     IconButton(
-                        onClick = { selected?.let { viewModel.launchApp(it) } },
+                        onClick = { selected?.let { viewModel.launchAppByPackage(it) } },
                         modifier = Modifier.size(56.dp)
                     ) {
                         Icon(imageVector = icon, contentDescription = desc, tint = themeColor, modifier = Modifier.size(32.dp))
@@ -688,7 +692,8 @@ fun HomeScreen(
 fun WidgetScreen(
     viewModel: LauncherViewModel,
     onSwipeLeft: () -> Unit,
-    appWidgetHost: AppWidgetHost
+    appWidgetHost: AppWidgetHost,
+    onAddWidget: () -> Unit
 ) {
     val widgets by viewModel.widgets.collectAsState()
     val fontColorInt by viewModel.fontColor.collectAsState()
@@ -728,12 +733,21 @@ fun WidgetScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("Widgets", color = themeColor, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                IconButton(onClick = { globalEditMode = !globalEditMode }) {
-                    Icon(
-                        imageVector = if (globalEditMode) Icons.Default.Close else Icons.Default.Settings,
-                        contentDescription = "Toggle Edit Mode",
-                        tint = if (globalEditMode) themeColor else themeColor.copy(alpha = 0.5f)
-                    )
+                Row {
+                    IconButton(onClick = onAddWidget) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add Widget",
+                            tint = themeColor.copy(alpha = 0.5f)
+                        )
+                    }
+                    IconButton(onClick = { globalEditMode = !globalEditMode }) {
+                        Icon(
+                            imageVector = if (globalEditMode) Icons.Default.Close else Icons.Default.Settings,
+                            contentDescription = "Toggle Edit Mode",
+                            tint = if (globalEditMode) themeColor else themeColor.copy(alpha = 0.5f)
+                        )
+                    }
                 }
             }
 
@@ -933,7 +947,7 @@ fun TopAppsScreen(
                                 .padding(vertical = 12.dp)
                                 .pointerInput(app) {
                                     detectTapGestures(
-                                        onTap = { viewModel.launchApp(app.packageName) },
+                                        onTap = { viewModel.launchApp(app) },
                                         onLongPress = { selectedAppForHide = app }
                                     )
                                 }
@@ -1021,11 +1035,11 @@ fun AppList(
                                 detectTapGestures(
                                     onTap = {
                                     if (app.packageName == context.packageName) {
-                                        onOpenSettings()
-                                    } else {
-                                        viewModel.launchApp(app.packageName)
-                                        onBack()
-                                    }
+                                    onOpenSettings()
+                                } else {
+                                    viewModel.launchApp(app)
+                                    onBack()
+                                }
                                 },
                                     onLongPress = {
                                         onEditApp(app)
@@ -1144,6 +1158,7 @@ fun AllAppsScreen(
     var searchQuery by remember { mutableStateOf("") }
     
     val allUniqueTags by viewModel.allUniqueTags.collectAsState()
+    val installedApps by viewModel.installedApps.collectAsState()
 
     androidx.compose.runtime.LaunchedEffect(selectedAppForEdit) {
         if (selectedAppForEdit != null) {
@@ -1321,7 +1336,7 @@ fun AllAppsScreen(
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (showPrivateSpace && (hasPrivateSpace || android.os.Build.VERSION.SDK_INT >= 35)) {
+                if (showPrivateSpace && hasPrivateSpace) {
                     IconButton(
                         onClick = { viewModel.requestUnlockPrivateSpace() },
                         modifier = Modifier.padding(end = 8.dp)
@@ -1374,7 +1389,7 @@ fun AllAppsScreen(
                     ) {
                         Text("Edit App", color = themeColor)
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            val isHidden = hiddenApps.contains(selectedAppForEdit!!.packageName)
+                            val isHidden = hiddenApps.contains(selectedAppForEdit!!.getUniqueId(context))
                             IconButton(
                                 onClick = {
                                     val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
@@ -1391,7 +1406,7 @@ fun AllAppsScreen(
                             }
                             IconButton(
                                 onClick = {
-                                    viewModel.toggleAppVisibility(selectedAppForEdit!!.packageName)
+                                    viewModel.toggleAppVisibility(selectedAppForEdit!!)
                                 }
                             ) {
                                 Icon(
@@ -1401,15 +1416,11 @@ fun AllAppsScreen(
                                 )
                             }
 
-                            if (viewModel.canUninstall(selectedAppForEdit!!.packageName)) {
+                            if (viewModel.canUninstall(selectedAppForEdit!!.packageName, selectedAppForEdit!!.userHandle)) {
                                 IconButton(
                                     onClick = {
-                                        val pkg = selectedAppForEdit?.packageName
-                                        if (pkg != null) {
-                                            val uri = android.net.Uri.fromParts("package", pkg, null)
-                                            val uninstallIntent = Intent(Intent.ACTION_DELETE, uri)
-                                            // Standard way to launch uninstaller from Activity
-                                            context.startActivity(uninstallIntent)
+                                        selectedAppForEdit?.let { app ->
+                                            viewModel.uninstallApp(app.packageName, app.userHandle)
                                         }
                                         selectedAppForEdit = null
                                     },
@@ -1429,9 +1440,25 @@ fun AllAppsScreen(
                     Column {
                         OutlinedTextField(
                             value = newLabel,
-                            onValueChange = { newLabel = it },
+                            onValueChange = { input ->
+                                if (input.length <= 30) {
+                                    newLabel = input.filter { it.isLetterOrDigit() || it.isWhitespace() || it == '-' }
+                                }
+                            },
                             label = { Text("App Name", color = Color.Gray) },
                             singleLine = true,
+                            trailingIcon = {
+                                val originalApp = installedApps.find { it.packageName == selectedAppForEdit?.packageName && it.userHandle == selectedAppForEdit?.userHandle }
+                                if (originalApp != null && newLabel != originalApp.label) {
+                                    IconButton(onClick = { newLabel = originalApp.label }) {
+                                        Icon(
+                                            imageVector = Icons.Default.Refresh,
+                                            contentDescription = "Revert to original name",
+                                            tint = themeColor.copy(alpha = 0.5f)
+                                        )
+                                    }
+                                }
+                            },
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedTextColor = themeColor,
                                 unfocusedTextColor = themeColor,
@@ -1523,7 +1550,7 @@ fun AllAppsScreen(
                 },
                 confirmButton = {
                     TextButton(onClick = {
-                        viewModel.renameApp(selectedAppForEdit!!.packageName, newLabel)
+                        viewModel.renameApp(selectedAppForEdit!!.packageName, newLabel.trim())
                         // Process tags: current tags + any remaining text in tagInput
                         val finalTags = (currentAppTags + tagInput.trim().split(" ")).filter { it.isNotBlank() }.distinct()
                         viewModel.setAppTags(selectedAppForEdit!!.packageName, finalTags)
@@ -2190,7 +2217,7 @@ fun HiddenAppsScreen(
                             .fillMaxWidth()
                             .clickable { 
                                 if (type == "all") {
-                                    viewModel.toggleAppVisibility(app.packageName)
+                                    viewModel.toggleAppVisibility(app)
                                 } else {
                                     viewModel.togglePopularVisibility(app.packageName)
                                 }
@@ -2218,8 +2245,16 @@ fun HiddenAppsScreen(
                         Text(
                             text = app.label, 
                             color = themeColor, 
-                            modifier = Modifier.padding(start = 16.dp)
+                            modifier = Modifier.padding(start = 16.dp).weight(1f)
                         )
+                        if (app.isPrivate) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = "Private",
+                                tint = themeColor.copy(alpha = 0.5f),
+                                modifier = Modifier.padding(start = 8.dp).size(16.dp)
+                            )
+                        }
                     }
                     HorizontalDivider(color = Color.DarkGray)
                 }
