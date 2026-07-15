@@ -23,7 +23,6 @@ Version: **1.0**
 -   **Customization**:
     -   Rename apps and add custom tags for better organization.
     -   Hide apps you don't need to see.
-    -   Full control over font colors and date formats.
 -   **Gestures**:
     -   Swipe up for All Apps.
     -   Swipe left/right for Popular apps and Widgets.
@@ -37,21 +36,6 @@ Version: **1.0**
   <img src="assets/Screenshot_20260715_162235.png" width="30%" />
   <img src="assets/Screenshot_20260715_162258.png" width="30%" />
 </p>
-
-## 🛠 Installation
-
-1.  Download the latest `app-debug.apk` from the [Releases](../../releases) section.
-2.  Install the APK on your Android device.
-3.  Set **EssentialTray** as your default Home app in Android Settings.
-
-## 🔐 Permissions
-
-To provide the best experience, EssentialTray uses the following permissions:
--   **Query All Packages**: To display and search your installed apps.
--   **Access Hidden Profiles**: Required for Android 15 Private Space integration.
--   **Notification Access**: Optional, for displaying unread counts.
--   **Accessibility Service**: Optional, for the "Double tap to sleep" gesture.
--   **Read Calendar**: Optional, for displaying today's events on the home screen.
 
 ## ⚖️ License
 
